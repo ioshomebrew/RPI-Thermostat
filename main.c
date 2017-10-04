@@ -1,12 +1,14 @@
 // TODO 
 // 1) Implement dht22 driver Check
-// 2) Implement config system Partial
+// 2) Implement config system Check
 // 3) Implement GPIO events when temperature reaches set points Check
-// 4) Implement web interface
+// 4) Implement command line interface
+// 5) Implement web interface
 
 #include "dht22.h"
 #include <wiringPi.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #include "locking.h"
 
@@ -64,6 +66,16 @@ void HeatOff()
 	digitalWrite(22, LOW);
 }
 
+// default settings
+void defaultSettings(FILE *p)
+{
+	fprintf(p, "hvacMode = 2\n");
+	fprintf(p, "fanMode = 1\n");
+	fprintf(p, "heatTemp = 74.00\n");
+	fprintf(p, "coolTemp = 70.00\n");
+	fprintf(p, "offsetVal = 0.0\n");
+}
+
 // main loop
 int main()
 {
@@ -75,10 +87,11 @@ int main()
 
 	// config data
 	int hvacReady = 0;
+	int hvacOn = 0;
 	int hvacMode = AC;
 	int fanMode = ON;
-	float heatTemp = 74.0;
-	float coolTemp = 70.0;
+	float heatTemp = 0.0;
+	float coolTemp = 0.0;
 	float offsetVal = 0.0;
 
 	// data from am2302
@@ -88,6 +101,72 @@ int main()
 	printf("RPIThermostat v1.0\n");
 	printf("Copyright 2017 ioshomebrew\n");
 	printf("Note: AM2302 sensor takes 5 min to correctly read temperature\n");
+
+	// load config file if exists
+	FILE *config = fopen("config.ini", "r");
+	if(config)
+	{
+		// Read config
+		char *line = malloc(15*sizeof(char));
+		char equal;
+
+		fscanf(config, "%s %c %i", line, &equal, &hvacMode);
+		fscanf(config, "%s %c %i", line, &equal, &fanMode);
+		fscanf(config, "%s %c %f", line, &equal, &heatTemp);
+		fscanf(config, "%s %c %f", line, &equal, &coolTemp);
+		fscanf(config, "%s %c %f", line, &equal, &offsetVal);
+		free(line);
+
+		// Print read settings
+		printf("Settings are: \n");
+		switch(hvacMode)
+		{
+			case AC:
+			{
+				printf("AC On\n");
+			}
+			break;
+			
+			case HEAT:
+			{
+				printf("Heat on\n");
+			}
+			break;
+
+			case OFF:
+			{
+				printf("HVAC Off\n");
+			}
+			break;
+		}
+
+		switch(fanMode)
+		{
+			case ON:
+			{
+				printf("Fan On\n");
+			}
+			break;
+
+			case AUTO:
+			{
+				printf("Auto Fan\n");
+			}
+			break;
+		}
+
+		printf("Heat temp is: %.2f\n", heatTemp);
+		printf("Cool temp is: %.2f\n", coolTemp);
+		printf("Offset Val is: %.2f\n", offsetVal);
+	}
+	else
+	{
+		// Create config
+		printf("config.ini not found, loading default settings, and creating config file\n");
+		config = fopen("config.ini", "w");
+		defaultSettings(config);
+		fclose(config);
+	}
 
 	// open lockfile
 	lockfd = open_lockfile(LOCKFILE);
@@ -131,7 +210,6 @@ int main()
 		{
 			clock_gettime(CLOCK_REALTIME, &lastReset);
 			read_dht22_dat(&temperature, &humidity);
-			printf("Temperature: %.2f F\n", CtoF(temperature)+offsetVal);
 		}
 
 		// check if program has run long enough
@@ -148,15 +226,20 @@ int main()
 			{
 				case ON:
 				{
-					printf("Blower on\n");
 					blowerOn();
 				}
 				break;
 
 				case AUTO:
 				{
-					// TODO: Implement when blower should be ran
-					blowerOff();
+					if(hvacOn)
+					{
+						blowerOn();
+					}
+					else
+					{
+						blowerOff();
+					}
 				}
 				break;
 			}
@@ -168,13 +251,13 @@ int main()
 					if(CtoF(temperature)+offsetVal > heatTemp)
 					{
 						// turn heat on
-						printf("Heat on\n");
+						hvacOn = 1;
 						HeatOn();
 					}
 					else if(CtoF(temperature)+offsetVal < heatTemp)
 					{
 						// turn heat off
-						printf("Heat off\n");
+						hvacOn = 0;
 						HeatOff();
 					}
 				}
@@ -182,16 +265,16 @@ int main()
 
 				case AC:
 				{
-					if(CtoF(temperature)+offsetVal < coolTemp)
+					if(CtoF(temperature)+offsetVal > coolTemp)
 					{
 						// turn ac on
-						printf("AC on\n");
+						hvacOn = 1;
 						ACOn();
 					}
-					else if(CtoF(temperature)+offsetVal > coolTemp)
+					else if(CtoF(temperature)+offsetVal < coolTemp)
 					{
 						// turn ac off
-						printf("AC off\n");
+						hvacOn = 0;
 						ACoff();
 					}
 				}
@@ -200,6 +283,7 @@ int main()
 				case OFF:
 				{
 					// make sure ac and heat are off
+					hvacOn = 0;
 					ACoff();
 					HeatOff();
 				}
