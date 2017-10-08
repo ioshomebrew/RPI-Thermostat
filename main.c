@@ -2,7 +2,7 @@
 // 1) Implement dht22 driver Check
 // 2) Implement config system Check
 // 3) Implement GPIO events when temperature reaches set points Check
-// 4) Implement command line interface
+// 4) Implement command line interface Partial Need to fix kernel crash
 // 5) Implement web interface
 
 #include "dht22.h"
@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <time.h>
 #include "locking.h"
+
+#define MAXBYTES 80
 
 // enum for hvac mode
 enum hvac
@@ -76,6 +78,23 @@ void defaultSettings(FILE *p)
 	fprintf(p, "offsetVal = 0.0\n");
 }
 
+// print command line help
+void printHelp()
+{
+	printf("Valid command options\n");
+    	printf("Note: commands are case sensitive\n");
+	printf("h: help\n");
+	printf("sht = XX.XX: set high temp\n");
+	printf("slt = XX.XX: set low temp\n");
+	printf("sov = XX.XX: set offset value\n");
+	printf("shm = AC/HEAT/OFF: set hvac mode\n");
+	printf("sfm = AUTO/ON: set blower mode\n");
+	printf("ps: print settings\n");
+	printf("p: print temp\n");
+    	printf("s: save settings\n");
+	printf("q: quit\n");
+}
+
 // main loop
 int main()
 {
@@ -88,6 +107,7 @@ int main()
 	// config data
 	int hvacReady = 0;
 	int hvacOn = 0;
+	int sensorReady = 0;
 	int hvacMode = AC;
 	int fanMode = ON;
 	float heatTemp = 0.0;
@@ -97,6 +117,17 @@ int main()
 	// data from am2302
 	float temperature;
 	float humidity;
+
+	// select data
+	int fd_stdin;
+	fd_set readfds;
+	struct timeval tv;
+	int num_readable;
+	int num_bytes;
+	char buf[MAXBYTES];
+	char *command = malloc(sizeof(char)*MAXBYTES);
+
+	fd_stdin = fileno(stdin);
 
 	printf("RPIThermostat v1.0\n");
 	printf("Copyright 2017 ioshomebrew\n");
@@ -156,8 +187,9 @@ int main()
 		}
 
 		printf("Heat temp is: %.2f\n", heatTemp);
-		printf("Cool temp is: %.2f\n", coolTemp);
+		printf("Cool temp is: %.2f\n", coolTemp);		
 		printf("Offset Val is: %.2f\n", offsetVal);
+		puts("");
 	}
 	else
 	{
@@ -195,11 +227,15 @@ int main()
 		printf("Dropping privileges failed\n");
 		return -1;
 	}
+
+	// print help menu
+	printHelp();
 	
 	// get current time for lastReset
 	clock_gettime(CLOCK_REALTIME, &lastReset);
 
 	// main loop
+	printf("-> ");
 	while(1)
 	{
 		// get current time
@@ -209,11 +245,14 @@ int main()
 		if((currentTime.tv_sec) - (lastReset.tv_sec) >= 3)
 		{
 			clock_gettime(CLOCK_REALTIME, &lastReset);
-			read_dht22_dat(&temperature, &humidity);
+			if(read_dht22_dat(&temperature, &humidity))
+			{
+				sensorReady = 1;
+			}
 		}
 
-		// check if program has run long enough
-		if(clock()/CLOCKS_PER_SEC >= 300)
+		// check if program has run long enough to activate HVAC
+		if(clock()/CLOCKS_PER_SEC >= 1)
 		{
 			if(!hvacReady)
 			{
@@ -248,13 +287,13 @@ int main()
 			{
 				case HEAT:
 				{
-					if(CtoF(temperature)+offsetVal > heatTemp)
+					if(CtoF(temperature)+offsetVal < heatTemp)
 					{
 						// turn heat on
 						hvacOn = 1;
 						HeatOn();
 					}
-					else if(CtoF(temperature)+offsetVal < heatTemp)
+					else if(CtoF(temperature)+offsetVal > heatTemp)
 					{
 						// turn heat off
 						hvacOn = 0;
@@ -290,7 +329,202 @@ int main()
 				break;
 			}
 		}
+
+		// check for input
+		FD_ZERO(&readfds);
+		FD_SET(fileno(stdin), &readfds);
+
+		// pause every 1ms to check for input
+		tv.tv_sec = 0;
+		tv.tv_usec = 1;
+
+		fflush(stdout);
+		num_readable = select(fd_stdin + 1, &readfds, NULL, NULL, &tv);
+		if (num_readable == -1)
+		{
+			// if error in select function
+			printf("error in select\n");
+		}
+		if (num_readable == 0)
+		{
+			// if no data is entered
+		}
+		else
+		{
+			// get data user entered
+			char equal;
+			num_bytes = read(fd_stdin, buf, MAXBYTES);
+			sscanf(buf, "%s", command);
+		
+			// new line
+			puts("");
+	
+			// process command
+			if(strcmp(command, "p") == 0)
+			{
+               			// print current temperature
+				if(sensorReady)
+				{
+					printf("Current temp is: %.2f\n", CtoF(temperature)+offsetVal);
+				}
+				else
+				{
+					printf("Sensor not ready\n");
+				}
+			}
+			else if(strcmp(command, "h") == 0)
+			{
+                		// print help menu
+				printHelp();
+			}
+			else if(strcmp(command, "q") == 0)
+			{
+		                // print quit menu
+				printf("Quiting now\n");
+				break;
+			}
+            		else if(strcmp(command, "s") == 0)
+            		{
+                		// save settings
+                		config = fopen("config.ini", "w");
+                		fprintf(config, "hvacMode = %i\n", hvacMode);
+                		fprintf(config, "fanMode = %i\n", fanMode);
+                		fprintf(config, "heatTemp = %.2f\n", heatTemp);
+                		fprintf(config, "coolTemp = %.2f\n", coolTemp);
+                		fprintf(config, "offsetVal = %.2f\n", offsetVal);
+                		fclose(config);
+            		}
+			else if(strcmp(command, "sht") == 0)
+			{
+				// set high temperature
+				sscanf(buf, "%s %c %f", command, &equal, &heatTemp);
+				printf("New high temp is: %.2f\n", heatTemp);
+			} 
+			else if(strcmp(command, "slt") == 0)
+			{
+				// set low temperature
+				sscanf(buf, "%s %c %f", command, &equal, &coolTemp);
+				printf("New low temp is: %.2f\n", coolTemp);
+			}
+			else if(strcmp(command, "sov") == 0)
+			{
+				// set offset value
+				sscanf(buf, "%s %c %f", command, &equal, &offsetVal);
+				printf("New offset value is: %.2f\n", offsetVal);
+			}
+			else if(strcmp(command, "shm") == 0)
+			{
+				// set hvac mode
+
+				// reset HVAC
+				blowerOff();
+				ACoff();
+				HeatOff();				
+
+				char *mode = malloc(sizeof(char)*10);
+				sscanf(buf, "%s %c %s", command, &equal, mode);
+				if(strcmp(mode, "AC") == 0)
+				{
+					// setting hvac mode to AC
+					hvacMode = AC;
+					printf("hvacMode is now AC\n");
+				}
+				else if(strcmp(mode, "HEAT") == 0)
+				{
+					// setting HVAC mode to heat
+					hvacMode = HEAT;
+					printf("hvacMode is now HEAT\n");
+				}
+				else if(strcmp(mode, "OFF") == 0)
+				{
+					// setting HVAC mode to off
+					hvacMode = OFF;
+					printf("hvacMode is now OFF\n");
+				}
+				else
+				{
+					printf("Invalid mode set\n");
+				}
+				free(mode);
+			}
+			else if(strcmp(command, "sfm") == 0)
+			{
+				// set blower mode
+				char *mode = malloc(sizeof(char)*10);
+				sscanf(buf, "%s %c %s", command, &equal, mode);
+				
+				if(strcmp(mode, "ON") == 0)
+				{
+					fanMode = ON;
+					printf("fanMode is now ON\n");
+				}
+				else if(strcmp(mode, "AUTO") == 0)
+				{
+					fanMode = AUTO;
+					printf("fanMode is now AUTO\n");
+				}
+				else
+				{
+					printf("Invalid mode set\n");
+				}
+				free(mode);
+			}
+			else if(strcmp(command, "ps") == 0)
+			{
+                		printf("Settings are: \n");
+                		switch(hvacMode)
+                		{
+                    			case AC:
+                    			{
+                        			printf("AC On\n");
+                    			}
+                        		break;
+                        
+                    			case HEAT:
+                    			{
+                        			printf("Heat on\n");
+                    			}
+                        		break;
+                        
+                    			case OFF:
+                    			{
+                        			printf("HVAC Off\n");
+                    			}
+                        		break;
+                		}
+                
+                		switch(fanMode)
+                		{
+                    			case ON:
+                    			{
+                        			printf("Fan On\n");
+                    			}
+                        		break;
+                        
+                   			case AUTO:
+                    			{
+                        			printf("Auto Fan\n");
+                    			}
+                        		break;
+                		}
+                
+                		printf("Heat temp is: %.2f\n", heatTemp);
+                		printf("Cool temp is: %.2f\n", coolTemp);
+                		printf("Offset Val is: %.2f\n", offsetVal);
+            		}
+			else
+			{
+				printf("Invalid command\n");
+			}
+
+			printf("-> ");
+		}
 	}
+
+	// turn HVAC system off
+	ACoff();
+	HeatOff();
+	blowerOff();
 
 	delay(1500);
 	close_lockfile(lockfd);
