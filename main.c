@@ -2,8 +2,8 @@
 // 1) Implement dht22 driver Check
 // 2) Implement config system Check
 // 3) Implement GPIO events when temperature reaches set points Check
-// 4) Implement command line interface Partial Need to fix kernel crash
-// 5) Implement web interface
+// 4) Implement command line interface Check
+// 5) Implement web interface Partial Javascript all that's left
 
 #include "dht22.h"
 #include <wiringPi.h>
@@ -12,7 +12,56 @@
 #include <time.h>
 #include "locking.h"
 
+// libmicrohttpd stuff
+#include <sys/types.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <microhttpd.h>
+#define PORT 8888
+
 #define MAXBYTES 80
+
+// load html file
+char *loadHTML(char *filename)
+{
+	FILE *file = fopen(filename, "rb");
+	if(file == NULL)
+	{
+		printf("File couldn't be opened\n");
+		return NULL;
+	}
+	int prev = ftell(file);
+	fseek(file, 0L, SEEK_END);
+	long int size = ftell(file);
+	fseek(file, prev, SEEK_SET);
+
+	char *data = malloc(sizeof(char)*size);
+	if(data == NULL)
+	{
+		printf("Memory alloc error\n");
+		return NULL;
+	}
+
+  	fread(data, 1, size, file);
+
+	return data;
+}
+
+// connection answer function
+int answer_to_connection(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **con_cls)
+{
+	const char *page = loadHTML("main.html");
+
+	struct MHD_Response *response;
+	int ret;
+
+	response = MHD_create_response_from_buffer(strlen(page), (void*)page, MHD_RESPMEM_PERSISTENT);
+
+	ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+	MHD_destroy_response (response);
+
+	return ret;
+}
 
 // enum for hvac mode
 enum hvac
@@ -100,6 +149,16 @@ int main()
 {
 	int lockfd;
 	int tries = 100;
+
+	// libmicrohttpd daemon
+	struct MHD_Daemon *daemon;
+
+	daemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY, PORT, NULL, NULL, &answer_to_connection, NULL, MHD_OPTION_END);
+	if(daemon == NULL)
+	{
+		printf("Error initializing webserver\n");
+		return 1;
+	}
 
 	// timer counter for reading
 	struct timespec lastReset, currentTime;
@@ -387,12 +446,20 @@ int main()
             		{
                 		// save settings
                 		config = fopen("config.ini", "w");
-                		fprintf(config, "hvacMode = %i\n", hvacMode);
-                		fprintf(config, "fanMode = %i\n", fanMode);
-                		fprintf(config, "heatTemp = %.2f\n", heatTemp);
-                		fprintf(config, "coolTemp = %.2f\n", coolTemp);
-                		fprintf(config, "offsetVal = %.2f\n", offsetVal);
-                		fclose(config);
+				if(config)
+				{
+                			fprintf(config, "hvacMode = %i\n", hvacMode);
+                			fprintf(config, "fanMode = %i\n", fanMode);
+                			fprintf(config, "heatTemp = %.2f\n", heatTemp);
+                			fprintf(config, "coolTemp = %.2f\n", coolTemp);
+                			fprintf(config, "offsetVal = %.2f\n", offsetVal);
+                			fclose(config);
+					printf("Settings saved\n");
+				}
+				else
+				{
+					printf("Error writing settings\n");
+				}
             		}
 			else if(strcmp(command, "sht") == 0)
 			{
@@ -527,6 +594,7 @@ int main()
 	blowerOff();
 
 	delay(1500);
+	MHD_stop_daemon(daemon);
 	close_lockfile(lockfd);
 
 	return 0;

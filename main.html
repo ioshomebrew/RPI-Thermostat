@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+.tab
+{
+  border-color: black;
+  border-style: solid;
+}
+</style>
+</head>
+<body>
+
+<h1 align="center">RPI Thermostat Web Interface</h1>
+
+<p id="currentTemp">Current Temp: </p>
+<p id="hvacMode">Current HVAC Mode: </p>
+<p id="fanMode">Current Fan Mode: </p>
+
+<div class="tab">
+  <h1 align="center">Settings</h1>
+</div>
+
+<p>HVAC Mode: 
+<select>
+  <option value="ac">AC</option>
+  <option value="heat">Heat</option>
+  <option value="off">Off</option>
+</select>
+</p>
+
+<p>Fan Mode: 
+<select>
+<option value="auto">Auto</option>
+  <option value="on">On</option>
+</select>
+</p>
+
+<form>
+  Heat Temp: 
+  <input type="number" name="hightemp">
+  <br>
+  <br>
+  Cool Temp:
+  <input type="number" name="cooltemp">
+  <br>
+  <br>
+  Sensor Offset Value: 
+  <input type="number" name="offsetvalue">
+  <br>
+  <br>
+  <input type="submit" name="submit">
+</form>
+
+</body>
+</html>
