@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 #include "locking.h"
 
 // libmicrohttpd stuff
@@ -18,8 +19,45 @@
 #include <sys/socket.h>
 #include <microhttpd.h>
 #define PORT 8888
+#define GET 0
+#define POST 1
+#define MAXANSWERSIZE 512
+#define POSTBUFFERSIZE 512
 
 #define MAXBYTES 80
+
+struct connection_info_struct
+{
+  int connectiontype;
+  char *answerstring;
+  struct MHD_PostProcessor *postprocessor;
+};
+
+// enum for hvac mode
+enum hvac
+{
+	AC, HEAT, OFF
+};
+
+// enum for fan mode
+enum fan
+{
+	ON, AUTO
+};
+
+// config data
+int hvacReady = 0;
+int hvacOn = 0;
+int sensorReady = 0;
+int hvacMode = AC;
+int fanMode = ON;
+float heatTemp = 0.0;
+float coolTemp = 0.0;
+float offsetVal = 0.0;
+
+// data from am2302
+float temperature;
+float humidity;
 
 // load html file
 char *loadHTML(char *filename)
@@ -47,33 +85,311 @@ char *loadHTML(char *filename)
 	return data;
 }
 
-// connection answer function
-int answer_to_connection(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **con_cls)
+static int send_page (struct MHD_Connection *connection, const char *page)
 {
-	const char *page = loadHTML("main.html");
+  	int ret;
+  	struct MHD_Response *response;
 
-	struct MHD_Response *response;
-	int ret;
+  	response = MHD_create_response_from_buffer (strlen (page), (void *) page, MHD_RESPMEM_PERSISTENT);
+  	if (!response)
+    		return MHD_NO;
 
-	response = MHD_create_response_from_buffer(strlen(page), (void*)page, MHD_RESPMEM_PERSISTENT);
-
-	ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-	MHD_destroy_response (response);
+  	ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+  	MHD_destroy_response (response);
 
 	return ret;
 }
 
-// enum for hvac mode
-enum hvac
+static int iterate_post (void *coninfo_cls, enum MHD_ValueKind kind, const char *key,
+              const char *filename, const char *content_type,
+              const char *transfer_encoding, const char *data, uint64_t off,
+              size_t size)
 {
-	AC, HEAT, OFF
-};
+	struct connection_info_struct *con_info = coninfo_cls;
+	char *page = loadHTML("main.html");
 
-// enum for fan mode
-enum fan
+	if (0 == strcmp (key, "hvacmode"))
+	{
+      		if (size > 0)
+        	{
+          		char *answerstring;
+          		answerstring = malloc (MAXANSWERSIZE);
+          		if (!answerstring)
+            			return MHD_NO;
+
+          		con_info->answerstring = page;
+			puts("");
+			printf("New HVAC mode is: %s\n", data);
+			printf("-> ");
+
+			// actually update data
+			if (0 == strcmp (data, "ac"))
+			{
+				hvacMode = AC;
+			}
+			else if (0 == strcmp (data, "heat"))
+			{
+				hvacMode = HEAT;
+			}
+			else if (0 == strcmp (data, "off"))
+			{
+				hvacMode = OFF;
+			}
+        	}
+      		else
+        		con_info->answerstring = NULL;
+	}
+	if (0 == strcmp (key, "fanmode"))
+	{
+      		if (size > 0)
+        	{
+          		char *answerstring;
+          		answerstring = malloc (MAXANSWERSIZE);
+          		if (!answerstring)
+            			return MHD_NO;
+
+          		con_info->answerstring = page;
+			puts("");
+			printf("New fan mode is: %s\n", data);
+			printf("-> ");
+
+			// actually update data
+			if (0 == strcmp (data, "auto"))
+			{
+				fanMode = AUTO;
+			}
+			else
+			{
+				fanMode = ON;
+			}
+        	}
+      		else
+        		con_info->answerstring = NULL;
+	}
+  	if (0 == strcmp (key, "cooltemp"))
+    	{
+      		if (size > 0)
+        	{
+          		char *answerstring;
+          		answerstring = malloc (MAXANSWERSIZE);
+          		if (!answerstring)
+            			return MHD_NO;
+
+          		con_info->answerstring = page;
+			puts("");
+			printf("New Cool temp is: %s\n", data);
+			printf("-> ");
+
+			// actually update data
+			coolTemp = atof(data);
+        	}
+      		else
+        		con_info->answerstring = NULL;
+    	}
+	if (0 == strcmp (key, "hightemp"))
+	{
+		if (size > 0)
+		{
+          		char *answerstring;
+          		answerstring = malloc (MAXANSWERSIZE);
+          		if (!answerstring)
+            			return MHD_NO;
+
+          		con_info->answerstring = page;
+			puts("");
+			printf("New High temp is: %s\n", data);
+			printf("-> ");
+
+			// actually update data
+			heatTemp = atof(data);
+		}
+		else
+			con_info->answerstring = NULL;
+	}
+	if (0 == strcmp (key, "offsetvalue"))
+	{
+		if (size > 0)
+		{
+          		char *answerstring;
+          		answerstring = malloc (MAXANSWERSIZE);
+          		if (!answerstring)
+            			return MHD_NO;
+
+          		con_info->answerstring = page;
+			puts("");
+			printf("New sensor offset value is: %s\n", data);
+			printf("-> ");
+
+			// actually update data
+			offsetVal = atof(data);
+
+			return MHD_NO;
+		}
+		else
+			con_info->answerstring = NULL;
+	}
+
+	free(page);
+
+	return MHD_YES;
+}
+
+static void request_completed (void *cls, struct MHD_Connection *connection,
+                   void **con_cls, enum MHD_RequestTerminationCode toe)
 {
-	ON, AUTO
-};
+  	struct connection_info_struct *con_info = *con_cls;
+
+  	if (NULL == con_info)
+    		return;
+
+  	if (con_info->connectiontype == POST)
+    	{
+      	MHD_destroy_post_processor (con_info->postprocessor);
+      		if (con_info->answerstring)
+        		free (con_info->answerstring);
+    	}
+
+  	free (con_info);
+	*con_cls = NULL;
+}
+
+// connection answer function
+int answer_to_connection(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **con_cls)
+{
+	// load main html
+	char *page = loadHTML("main.html");
+	char *newPage = malloc(strlen(page)*sizeof(char)+100);
+	
+	// add current data to web page
+	char *hvacModeString;
+	char *fanModeString;
+	switch(hvacMode)
+	{
+		case AC:
+		{
+			hvacModeString = "AC";
+			switch(fanMode)
+			{
+				case AUTO:
+				{
+					fanModeString = "Auto";
+					snprintf(newPage, strlen(page)+20, page, CtoF(temperature)+offsetVal, hvacModeString, fanModeString, "selected", "", "", "selected", "", heatTemp, coolTemp, offsetVal);
+				}
+				break;
+
+				case ON:
+				{
+					fanModeString = "On";
+					snprintf(newPage, strlen(page)+20, page, CtoF(temperature)+offsetVal, hvacModeString, fanModeString, "selected", "", "", "", "selected", heatTemp, coolTemp, offsetVal);
+				}
+				break;
+			}
+		}
+		break;
+
+		case HEAT:
+		{
+			hvacModeString = "Heat";
+			switch(fanMode)
+			{
+				case AUTO:
+				{
+					fanModeString = "Auto";
+					snprintf(newPage, strlen(page)+20, page, CtoF(temperature)+offsetVal, hvacModeString, fanModeString, "", "selected", "", "selected", "", heatTemp, coolTemp, offsetVal);
+				}
+				break;
+
+				case ON:
+				{
+					fanModeString = "On";
+					snprintf(newPage, strlen(page)+20, page, CtoF(temperature)+offsetVal, hvacModeString, fanModeString, "", "selected", "", "", "selected", heatTemp, coolTemp, offsetVal);
+				}
+				break;
+			}
+		}
+		break;
+
+		case OFF:
+		{
+			hvacModeString = "Off";
+			switch(fanMode)
+			{
+				case AUTO:
+				{
+					fanModeString = "Auto";
+					snprintf(newPage, strlen(page)+20, page, CtoF(temperature)+offsetVal, hvacModeString, fanModeString, "", "", "selected", "selected", "", heatTemp, coolTemp, offsetVal);
+				}
+				break;
+
+				case ON:
+				{
+					fanModeString = "On";
+
+					snprintf(newPage, strlen(page)+20, page, CtoF(temperature)+offsetVal, hvacModeString, fanModeString, "", "", "selected", "", "selected", heatTemp, coolTemp, offsetVal);
+				}
+				break;
+			}
+		}
+		break;
+	}
+
+	//free(page);
+	//free(hvacModeString);
+	//free(fanModeString);
+
+	if (NULL == *con_cls)
+    	{
+      		struct connection_info_struct *con_info;
+
+      		con_info = malloc (sizeof (struct connection_info_struct));
+      		if (NULL == con_info)
+        		return MHD_NO;
+      		con_info->answerstring = NULL;
+
+      		if (0 == strcmp (method, "POST"))
+        	{
+          		con_info->postprocessor = MHD_create_post_processor (connection, POSTBUFFERSIZE,
+                                       iterate_post, (void *) con_info);
+
+          		if (NULL == con_info->postprocessor)
+            		{
+              			free (con_info);
+              			return MHD_NO;
+            		}
+
+          		con_info->connectiontype = POST;
+        	}
+      		else
+        		con_info->connectiontype = GET;
+
+      		*con_cls = (void *) con_info;
+
+      		return MHD_YES;
+    	}
+
+  	if (0 == strcmp (method, "GET"))
+    	{
+     		return send_page (connection, newPage);
+    	}
+
+	if (0 == strcmp (method, "POST"))
+    	{
+      		struct connection_info_struct *con_info = *con_cls;
+
+      		if (*upload_data_size != 0)
+        	{
+          		MHD_post_process (con_info->postprocessor, upload_data,
+                            *upload_data_size);
+     			*upload_data_size = 0;
+
+       			return MHD_YES;
+        	}
+      		else if (NULL != con_info->answerstring)
+       			return send_page (connection, newPage);
+    	}
+
+	return send_page (connection, newPage);
+}
 
 // LED Yellow
 void blowerOn()
@@ -94,6 +410,9 @@ void ACOn()
 {
 	// PIN 11/GPIO 17
 	digitalWrite(17, HIGH);
+
+	// Safety turn heater off
+	HeatOff();
 }
 
 // LED Green
@@ -108,6 +427,9 @@ void HeatOn()
 {
 	// PIN 15/GPIO 22
 	digitalWrite(22, HIGH);
+
+	// Safety turn AC off
+	ACoff();
 }
 
 // LED Red
@@ -162,20 +484,6 @@ int main()
 
 	// timer counter for reading
 	struct timespec lastReset, currentTime;
-
-	// config data
-	int hvacReady = 0;
-	int hvacOn = 0;
-	int sensorReady = 0;
-	int hvacMode = AC;
-	int fanMode = ON;
-	float heatTemp = 0.0;
-	float coolTemp = 0.0;
-	float offsetVal = 0.0;
-
-	// data from am2302
-	float temperature;
-	float humidity;
 
 	// select data
 	int fd_stdin;

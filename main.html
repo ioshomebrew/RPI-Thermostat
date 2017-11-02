@@ -11,45 +11,54 @@
 </head>
 <body>
 
+<meta http-equiv="refresh" content="10"/>
+
 <h1 align="center">RPI Thermostat Web Interface</h1>
 
-<p id="currentTemp">Current Temp: </p>
-<p id="hvacMode">Current HVAC Mode: </p>
-<p id="fanMode">Current Fan Mode: </p>
+<div class="data">
+	<p id="currentTemp">Current Temp: %.2f</p>
+	<p id="hvacMode">Current HVAC Mode: %s</p>
+	<p id="fanMode">Current Fan Mode: %s</p>
+</div>
 
 <div class="tab">
   <h1 align="center">Settings</h1>
 </div>
 
-<p>HVAC Mode: 
-<select>
-  <option value="ac">AC</option>
-  <option value="heat">Heat</option>
-  <option value="off">Off</option>
-</select>
-</p>
+<form method="post">
+	HVAC Mode: 
+	<select name="hvacmode">
+  		<option %s value="ac">AC</option>
+  		<option %s value="heat">Heat</option>
+  		<option %s value="off">Off</option>
+	</select>
+	<br>
+	<br>
 
-<p>Fan Mode: 
-<select>
-<option value="auto">Auto</option>
-  <option value="on">On</option>
-</select>
-</p>
+	Fan Mode: 
+	<select name="fanmode">
+		<option %s value="auto">Auto</option>
+  		<option %s value="on">On</option>
+	</select>
+	<br>
+	<br>
 
-<form>
-  Heat Temp: 
-  <input type="number" name="hightemp">
-  <br>
-  <br>
-  Cool Temp:
-  <input type="number" name="cooltemp">
-  <br>
-  <br>
-  Sensor Offset Value: 
-  <input type="number" name="offsetvalue">
-  <br>
-  <br>
-  <input type="submit" name="submit">
+  	Heat Temp: 
+  	<input type="number" value="%.2f" name="hightemp">
+  	<br>
+  	<br>
+
+  	Cool Temp:
+	<input type="number" value="%.2f" name="cooltemp">
+  	<br>
+  	<br>
+
+  	Sensor Offset Value: 
+  	<input type="number" value="%.2f" name="offsetvalue">
+  	<br>
+  	<br>
+  
+	<input type="submit" name="submit">
 </form>
 
 </body>
